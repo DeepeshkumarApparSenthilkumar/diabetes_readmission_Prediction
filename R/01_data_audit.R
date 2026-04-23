@@ -1,7 +1,8 @@
 library(tidyverse)
 library(skimr)
 library(janitor)
-library(ggplot2)
+
+set.seed(42)
 
 # load raw data — ? is missing value code in this dataset
 df <- read_csv("data/raw/diabetic_data.csv", na = c("", "NA", "?"))
@@ -23,7 +24,7 @@ missing <- df %>%
   arrange(desc(pct_missing))
 
 cat("\n=== MISSING VALUES ===\n")
-print(missing, n = 30)
+print(missing, n = Inf)
 write_csv(missing, "outputs/results/missing_audit.csv")
 
 # missing heatmap (top 10 columns with missing data)
@@ -31,8 +32,8 @@ top_missing_cols <- missing %>% slice_head(n = 10) %>% pull(col)
 if (length(top_missing_cols) > 0) {
   missing_mat <- df %>%
     select(all_of(top_missing_cols)) %>%
+    slice_sample(n = min(2000, n())) %>%
     mutate(row_id = row_number()) %>%
-    sample_n(min(2000, n())) %>%
     pivot_longer(-row_id, names_to = "col", values_to = "val") %>%
     mutate(is_missing = is.na(val))
 
@@ -62,10 +63,11 @@ cat("\nDeceased/hospice patients (discharge IDs 11,13,14,19,20,21):", dead_count
 cat("These will be removed in preprocessing (cannot be readmitted)\n")
 
 # duplicate patients
+n_repeated <- df %>% count(patient_nbr) %>% filter(n > 1) %>% nrow()
 cat("\n=== DUPLICATE PATIENTS ===\n")
 cat("Unique patients:", n_distinct(df$patient_nbr), "\n")
 cat("Total encounters:", nrow(df), "\n")
-cat("Patients with >1 encounter:", df %>% count(patient_nbr) %>% filter(n > 1) %>% nrow(), "\n")
+cat("Patients with >1 encounter:", n_repeated, "\n")
 
 # cardinality of categorical columns
 cat("\n=== CARDINALITY (character/factor columns) ===\n")
@@ -74,7 +76,8 @@ card <- df %>%
   summarise(across(everything(), n_distinct)) %>%
   pivot_longer(everything(), names_to = "col", values_to = "unique_vals") %>%
   arrange(desc(unique_vals))
-print(card, n = 30)
+print(card, n = Inf)
+write_csv(card, "outputs/results/cardinality.csv")
 
 # numeric summary
 cat("\n=== NUMERIC SUMMARY ===\n")
@@ -87,12 +90,13 @@ data_summary <- tibble(
   value  = c(
     nrow(df),
     n_distinct(df$patient_nbr),
-    df %>% count(patient_nbr) %>% filter(n > 1) %>% nrow(),
+    n_repeated,
     dead_count,
     round(mean(df$readmitted == "<30", na.rm = TRUE) * 100, 1),
     round(mean(df$readmitted == ">30", na.rm = TRUE) * 100, 1),
     round(mean(df$readmitted == "NO",  na.rm = TRUE) * 100, 1)
-  )
+  ),
+  unit = c("count", "count", "count", "count", "pct", "pct", "pct")
 )
 write_csv(data_summary, "outputs/results/data_summary.csv")
 cat("\ndata_summary.csv saved\n")
