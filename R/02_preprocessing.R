@@ -4,90 +4,97 @@ library(janitor)
 df <- read_csv("data/raw/diabetic_data.csv", na = c("", "NA", "?"))
 df <- df %>% clean_names()
 
-# drop columns that are mostly missing or not useful for modeling
-df <- df %>%
-  select(-weight, -payer_code, -encounter_id)
+cat("=== PREPROCESSING PIPELINE ===\n")
+cat("Start:", nrow(df), "rows\n")
 
-# keep only first encounter per patient to avoid leakage
+# Step 1: remove deceased/hospice patients (cannot be readmitted — label noise)
+dead_ids <- c(11, 13, 14, 19, 20, 21)
+df <- df %>% filter(!discharge_disposition_id %in% dead_ids)
+cat("After removing deceased/hospice:", nrow(df), "rows\n")
+
+# Step 2: keep only first encounter per patient (prevent data leakage)
 df <- df %>%
   arrange(patient_nbr) %>%
   distinct(patient_nbr, .keep_all = TRUE) %>%
-  select(-patient_nbr)
+  select(-patient_nbr, -encounter_id)
+cat("After dedup (first encounter):", nrow(df), "rows\n")
 
-nrow(df)  # should be 71518
+# Step 3: drop high-missing columns
+df <- df %>% select(-weight, -payer_code)
 
-# fix missing values
+# Step 4: impute remaining missing values
 df <- df %>%
   mutate(
-    race             = replace_na(race, "Unknown"),
+    race              = replace_na(race, "Unknown"),
     medical_specialty = replace_na(medical_specialty, "Unknown")
   )
 
-# binary target - what we actually care about is <30 day readmission
+# Step 5: binary target — <30 = readmitted within 30 days
 df <- df %>%
-  mutate(readmitted_binary = ifelse(readmitted == "<30", 1, 0)) %>%
+  mutate(readmitted_binary = as.integer(readmitted == "<30")) %>%
   select(-readmitted)
 
-table(df$readmitted_binary)
-round(prop.table(table(df$readmitted_binary)) * 100, 1)
+cat("Class distribution:\n")
+print(prop.table(table(df$readmitted_binary)) %>% round(3))
 
-# age is a range like [50-60) - convert to numeric midpoint
+# Step 6: age range -> numeric midpoint
 df <- df %>%
   mutate(age_numeric = case_when(
-    age == "[0-10)"   ~ 5,
-    age == "[10-20)"  ~ 15,
-    age == "[20-30)"  ~ 25,
-    age == "[30-40)"  ~ 35,
-    age == "[40-50)"  ~ 45,
-    age == "[50-60)"  ~ 55,
-    age == "[60-70)"  ~ 65,
-    age == "[70-80)"  ~ 75,
-    age == "[80-90)"  ~ 85,
-    age == "[90-100)" ~ 95
+    age == "[0-10)"   ~ 5,  age == "[10-20)"  ~ 15,
+    age == "[20-30)"  ~ 25, age == "[30-40)"  ~ 35,
+    age == "[40-50)"  ~ 45, age == "[50-60)"  ~ 55,
+    age == "[60-70)"  ~ 65, age == "[70-80)"  ~ 75,
+    age == "[80-90)"  ~ 85, age == "[90-100)" ~ 95,
+    TRUE ~ 65
   )) %>%
   select(-age)
 
-# diag codes have 700+ levels - group them into broad icd-9 categories
-# this is standard practice for this dataset
+# Step 7: ICD-9 grouping (diag_1, diag_2, diag_3)
 group_diag <- function(x) {
   case_when(
-    is.na(x)                          ~ "Other",
-    str_detect(x, "^[Vv]")           ~ "Other",
-    str_detect(x, "^[Ee]")           ~ "Other",
-    as.numeric(x) >= 390 & as.numeric(x) <= 459 ~ "Circulatory",
-    as.numeric(x) >= 460 & as.numeric(x) <= 519 ~ "Respiratory",
-    as.numeric(x) >= 520 & as.numeric(x) <= 579 ~ "Digestive",
-    as.numeric(x) >= 250 & as.numeric(x) < 251   ~ "Diabetes",
-    as.numeric(x) >= 800 & as.numeric(x) <= 999  ~ "Injury",
-    as.numeric(x) >= 710 & as.numeric(x) <= 739  ~ "Musculoskeletal",
-    as.numeric(x) >= 580 & as.numeric(x) <= 629  ~ "Genitourinary",
-    as.numeric(x) >= 140 & as.numeric(x) <= 239  ~ "Neoplasms",
-    TRUE                                           ~ "Other"
+    is.na(x)                                              ~ "Other",
+    str_detect(x, "^[Vv]|^[Ee]")                         ~ "Other",
+    suppressWarnings(as.numeric(x)) >= 390 &
+      suppressWarnings(as.numeric(x)) <= 459             ~ "Circulatory",
+    suppressWarnings(as.numeric(x)) >= 460 &
+      suppressWarnings(as.numeric(x)) <= 519             ~ "Respiratory",
+    suppressWarnings(as.numeric(x)) >= 520 &
+      suppressWarnings(as.numeric(x)) <= 579             ~ "Digestive",
+    suppressWarnings(as.numeric(x)) >= 250 &
+      suppressWarnings(as.numeric(x)) <  251             ~ "Diabetes",
+    suppressWarnings(as.numeric(x)) >= 800 &
+      suppressWarnings(as.numeric(x)) <= 999             ~ "Injury",
+    suppressWarnings(as.numeric(x)) >= 710 &
+      suppressWarnings(as.numeric(x)) <= 739             ~ "Musculoskeletal",
+    suppressWarnings(as.numeric(x)) >= 580 &
+      suppressWarnings(as.numeric(x)) <= 629             ~ "Genitourinary",
+    suppressWarnings(as.numeric(x)) >= 140 &
+      suppressWarnings(as.numeric(x)) <= 239             ~ "Neoplasms",
+    TRUE                                                   ~ "Other"
   )
 }
+df <- df %>%
+  mutate(across(c(diag_1, diag_2, diag_3), group_diag))
 
+# Step 8: medical_specialty — keep top 10, collapse rest
+top_spec <- df %>% count(medical_specialty) %>%
+  slice_max(n, n = 10) %>% pull(medical_specialty)
+df <- df %>%
+  mutate(medical_specialty = ifelse(medical_specialty %in% top_spec,
+                                    medical_specialty, "Other"))
+
+# Step 9: A1C and glucose result — ordinal encoding
 df <- df %>%
   mutate(
-    diag_1 = group_diag(diag_1),
-    diag_2 = group_diag(diag_2),
-    diag_3 = group_diag(diag_3)
+    a1cresult  = case_when(
+      a1cresult == "None" ~ 0L, a1cresult == "Norm" ~ 1L,
+      a1cresult == ">7"   ~ 2L, a1cresult == ">8"   ~ 3L, TRUE ~ 0L),
+    max_glu_serum = case_when(
+      max_glu_serum == "None"  ~ 0L, max_glu_serum == "Norm"  ~ 1L,
+      max_glu_serum == ">200"  ~ 2L, max_glu_serum == ">300"  ~ 3L, TRUE ~ 0L)
   )
 
-# medical_specialty has 73 levels - keep top ones, collapse rest to Other
-top_specialties <- df %>%
-  count(medical_specialty) %>%
-  slice_max(n, n = 10) %>%
-  pull(medical_specialty)
-
-df <- df %>%
-  mutate(medical_specialty = ifelse(
-    medical_specialty %in% top_specialties,
-    medical_specialty,
-    "Other"
-  ))
-
-# admission_type_id, discharge_disposition_id, admission_source_id
-# are numeric codes but they're actually categories
+# Step 10: admission/discharge/source IDs -> factor
 df <- df %>%
   mutate(
     admission_type_id        = as.factor(admission_type_id),
@@ -95,15 +102,13 @@ df <- df %>%
     admission_source_id      = as.factor(admission_source_id)
   )
 
-# convert all remaining character columns to factors for modeling
-df <- df %>%
-  mutate(across(where(is.character), as.factor))
+# Step 11: convert all remaining character columns to factors
+df <- df %>% mutate(across(where(is.character), as.factor))
 
 # final check
-glimpse(df)
-dim(df)
-sum(is.na(df))  # should be 0
+cat("\nFinal dimensions:", nrow(df), "rows x", ncol(df), "cols\n")
+cat("Missing values remaining:", sum(is.na(df)), "\n")
+cat("Positive rate:", round(mean(df$readmitted_binary) * 100, 1), "%\n")
 
-# save cleaned data
 write_csv(df, "data/processed/diabetes_clean.csv")
-cat("saved to data/processed/diabetes_clean.csv\n")
+cat("Saved: data/processed/diabetes_clean.csv\n")
