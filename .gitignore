@@ -3,6 +3,7 @@
 .RData
 .Ruserdata
 outputs/results/*.rds
+outputs/results/dtest.rds
 data/processed/*.csv
 __pycache__/
 *.pyc
