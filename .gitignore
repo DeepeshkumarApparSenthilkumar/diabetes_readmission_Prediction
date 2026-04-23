@@ -2,3 +2,8 @@
 .Rhistory
 .RData
 .Ruserdata
+outputs/results/*.rds
+data/processed/*.csv
+__pycache__/
+*.pyc
+.venv/
