@@ -1,8 +1,6 @@
 library(tidyverse)
-library(ggplot2)
 library(scales)
 library(ggcorrplot)
-library(gridExtra)
 
 df <- read_csv("data/processed/diabetes_clean.csv") %>%
   mutate(readmitted_binary = as.factor(readmitted_binary))
