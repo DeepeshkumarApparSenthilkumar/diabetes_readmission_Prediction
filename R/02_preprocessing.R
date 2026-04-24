@@ -51,26 +51,19 @@ df <- df %>%
 
 # Step 7: ICD-9 grouping (diag_1, diag_2, diag_3)
 group_diag <- function(x) {
+  x_num <- suppressWarnings(as.numeric(x))
   case_when(
-    is.na(x)                                              ~ "Other",
-    str_detect(x, "^[Vv]|^[Ee]")                         ~ "Other",
-    suppressWarnings(as.numeric(x)) >= 390 &
-      suppressWarnings(as.numeric(x)) <= 459             ~ "Circulatory",
-    suppressWarnings(as.numeric(x)) >= 460 &
-      suppressWarnings(as.numeric(x)) <= 519             ~ "Respiratory",
-    suppressWarnings(as.numeric(x)) >= 520 &
-      suppressWarnings(as.numeric(x)) <= 579             ~ "Digestive",
-    suppressWarnings(as.numeric(x)) >= 250 &
-      suppressWarnings(as.numeric(x)) <  251             ~ "Diabetes",
-    suppressWarnings(as.numeric(x)) >= 800 &
-      suppressWarnings(as.numeric(x)) <= 999             ~ "Injury",
-    suppressWarnings(as.numeric(x)) >= 710 &
-      suppressWarnings(as.numeric(x)) <= 739             ~ "Musculoskeletal",
-    suppressWarnings(as.numeric(x)) >= 580 &
-      suppressWarnings(as.numeric(x)) <= 629             ~ "Genitourinary",
-    suppressWarnings(as.numeric(x)) >= 140 &
-      suppressWarnings(as.numeric(x)) <= 239             ~ "Neoplasms",
-    TRUE                                                   ~ "Other"
+    is.na(x)                              ~ "Other",
+    str_detect(x, "^[Vv]|^[Ee]")         ~ "Other",
+    x_num >= 390 & x_num <= 459           ~ "Circulatory",
+    x_num >= 460 & x_num <= 519           ~ "Respiratory",
+    x_num >= 520 & x_num <= 579           ~ "Digestive",
+    x_num >= 250 & x_num <  251           ~ "Diabetes",
+    x_num >= 800 & x_num <= 999           ~ "Injury",
+    x_num >= 710 & x_num <= 739           ~ "Musculoskeletal",
+    x_num >= 580 & x_num <= 629           ~ "Genitourinary",
+    x_num >= 140 & x_num <= 239           ~ "Neoplasms",
+    TRUE                                   ~ "Other"
   )
 }
 df <- df %>%
