@@ -3,97 +3,95 @@ import numpy as np
 import matplotlib.pyplot as plt
 import shap
 import xgboost as xgb
-from sklearn.model_selection import train_test_split
 
-# load the cleaned data
-df = pd.read_csv("data/processed/diabetes_clean.csv")
+# Load the exact same XGBoost model evaluated in 07_evaluation.R
+# Model was exported as JSON from R via xgb.save()
+booster = xgb.Booster()
+booster.load_model("outputs/results/model_xgb.json")
 
-# same preprocessing as R - binary target
+# Load cleaned + featured data (same as used in R modeling)
+df = pd.read_csv("data/processed/diabetes_featured.csv")
 df["readmitted_binary"] = df["readmitted_binary"].astype(int)
 
-# separate features and target
 X = df.drop(columns=["readmitted_binary"])
 y = df["readmitted_binary"]
 
-# one-hot encode categorical columns
-X = pd.get_dummies(X, drop_first=True)
+# One-hot encode to match R's model.matrix encoding
+X_enc = pd.get_dummies(X, drop_first=True)
 
-# same 70/30 split with same seed as R
+# Load R's xgb_col_names to align columns exactly
+# Generate from R: write.csv(data.frame(col_names=readRDS("outputs/results/xgb_col_names.rds")),
+#                            "outputs/results/xgb_col_names.csv", row.names=FALSE)
+try:
+    col_names = pd.read_csv("outputs/results/xgb_col_names.csv")["col_names"].tolist()
+    for col in col_names:
+        if col not in X_enc.columns:
+            X_enc[col] = 0
+    X_enc = X_enc[col_names]
+    print(f"Aligned to {len(col_names)} R model columns")
+except FileNotFoundError:
+    print("xgb_col_names.csv not found — using all encoded columns")
+    col_names = X_enc.columns.tolist()
+
+# 70/30 split — same seed as R
+from sklearn.model_selection import train_test_split
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.3, random_state=42, stratify=y
+    X_enc, y, test_size=0.3, random_state=42, stratify=y
 )
 
-print("train size:", X_train.shape)
-print("test size: ", X_test.shape)
+dtest = xgb.DMatrix(X_test)
+preds = booster.predict(dtest)
 
-# manually balance training set - 10k each class
-train_df = X_train.copy()
-train_df["target"] = y_train.values
-
-no_class  = train_df[train_df["target"] == 0].sample(n=10000, random_state=42)
-yes_class = train_df[train_df["target"] == 1].sample(n=10000, random_state=42, replace=True)
-train_balanced = pd.concat([no_class, yes_class]).sample(frac=1, random_state=42)
-
-X_bal = train_balanced.drop(columns=["target"])
-y_bal = train_balanced["target"]
-
-print("balanced training size:", X_bal.shape)
-print("class balance:\n", y_bal.value_counts(normalize=True).round(3))
-
-# train xgboost
-dtrain = xgb.DMatrix(X_bal, label=y_bal)
-dtest  = xgb.DMatrix(X_test, label=y_test)
-
-params = {
-    "objective":        "binary:logistic",
-    "eval_metric":      "auc",
-    "max_depth":        3,
-    "eta":              0.1,
-    "subsample":        0.8,
-    "colsample_bytree": 0.8,
-    "seed":             42
-}
-
-model = xgb.train(params, dtrain, num_boost_round=100, verbose_eval=False)
-
-# test AUC
 from sklearn.metrics import roc_auc_score
-preds = model.predict(dtest)
-auc   = roc_auc_score(y_test, preds)
-print(f"\ntest AUC: {auc:.3f}")
+print(f"Test AUC (R model loaded in Python): {roc_auc_score(y_test, preds):.3f}")
 
 # SHAP analysis
-print("\ncomputing SHAP values...")
-explainer   = shap.TreeExplainer(model)
+print("\nComputing SHAP values...")
+explainer   = shap.TreeExplainer(booster)
 shap_values = explainer.shap_values(X_test)
 
-# 1. summary plot - shows most important features overall
-plt.figure()
+# 22: SHAP bar — mean absolute SHAP (top 15)
+plt.figure(figsize=(8, 6))
 shap.summary_plot(shap_values, X_test, max_display=15,
                   show=False, plot_type="bar")
-plt.title("feature importance - mean SHAP value")
+plt.title("feature importance — mean |SHAP value| (XGBoost)")
 plt.tight_layout()
-plt.savefig("outputs/figures/10_shap_importance.png", dpi=150, bbox_inches="tight")
+plt.savefig("outputs/figures/22_shap_importance_bar.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("saved 10_shap_importance.png")
+print("saved 22_shap_importance_bar.png")
 
-# 2. beeswarm plot - shows direction and magnitude of each feature
-plt.figure()
+# 23: SHAP beeswarm — direction and magnitude
+plt.figure(figsize=(8, 6))
 shap.summary_plot(shap_values, X_test, max_display=15, show=False)
-plt.title("SHAP summary - feature impact on readmission")
+plt.title("SHAP summary — feature impact direction and magnitude")
 plt.tight_layout()
-plt.savefig("outputs/figures/11_shap_beeswarm.png", dpi=150, bbox_inches="tight")
+plt.savefig("outputs/figures/23_shap_beeswarm.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("saved 11_shap_beeswarm.png")
+print("saved 23_shap_beeswarm.png")
 
-# 3. top feature names and mean absolute SHAP values
+# 24: SHAP waterfall — single highest-risk patient
+high_risk_idx = int(np.argmax(preds))
+shap_exp = shap.Explanation(
+    values        = shap_values[high_risk_idx],
+    base_values   = explainer.expected_value,
+    data          = X_test.iloc[high_risk_idx].values,
+    feature_names = X_test.columns.tolist()
+)
+plt.figure(figsize=(9, 6))
+shap.plots.waterfall(shap_exp, max_display=15, show=False)
+plt.title("SHAP waterfall — highest-risk patient")
+plt.tight_layout()
+plt.savefig("outputs/figures/24_shap_waterfall.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("saved 24_shap_waterfall.png")
+
+# Save SHAP summary CSV
 shap_df = pd.DataFrame({
-    "feature":    X_test.columns,
-    "mean_shap":  np.abs(shap_values).mean(axis=0)
+    "feature":   X_test.columns,
+    "mean_shap": np.abs(shap_values).mean(axis=0)
 }).sort_values("mean_shap", ascending=False).head(15)
 
-print("\ntop 15 features by SHAP:")
+print("\nTop 15 features by |SHAP|:")
 print(shap_df.to_string(index=False))
-
 shap_df.to_csv("outputs/results/shap_values.csv", index=False)
-print("\nSHAP values saved to outputs/results/shap_values.csv")
+print("\nSaved: outputs/results/shap_values.csv")
