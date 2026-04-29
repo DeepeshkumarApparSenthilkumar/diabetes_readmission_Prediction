@@ -1,6 +1,7 @@
 # run_pipeline.R — execute the full diabetes readmission pipeline in one shot.
 # Run from project root: source("run_pipeline.R")
-# Total runtime: ~20-30 min (dominated by grid-search in 05_modeling.R)
+# Total runtime: ~45-60 min (dominated by expanded grid-search in 05_modeling.R)
+#   XGB: 144 combos | LightGBM: 27 combos | RF: 5 combos (ntree=500)
 
 cat("========================================\n")
 cat(" DIABETES READMISSION PREDICTION PIPELINE\n")
@@ -11,7 +12,7 @@ pipeline <- list(
   list(script = "R/02_preprocessing.R",      label = "2/7  Preprocessing"),
   list(script = "R/03_eda.R",                label = "3/7  EDA (16 plots)"),
   list(script = "R/04_feature_engineering.R",label = "4/7  Feature engineering"),
-  list(script = "R/05_modeling.R",           label = "5/7  Modeling (grid search) ~20 min"),
+  list(script = "R/05_modeling.R",           label = "5/7  Modeling (grid search) ~45-60 min"),
   list(script = "R/06_ensemble.R",           label = "6/7  Ensemble + threshold opt."),
   list(script = "R/07_evaluation.R",         label = "7/7  Evaluation + figures")
 )
