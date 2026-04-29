@@ -137,29 +137,26 @@ df %>%
   theme(legend.position = "none")
 save_fig("09_med_change_readmit.png", 6, 4)
 
-# 10: discharge disposition readmission rate (top 10 by count)
+# 10: discharge disposition clinical group vs readmission rate
 df %>%
   group_by(discharge_disposition_id) %>%
   summarise(readmit_rate = mean(as.integer(as.character(readmitted_binary))),
             n = n()) %>%
-  slice_max(n, n = 10) %>%
   ggplot(aes(x = reorder(as.character(discharge_disposition_id), readmit_rate),
              y = readmit_rate)) +
   geom_col(fill = "#F4A261", alpha = 0.85) +
   geom_text(aes(label = scales::percent(readmit_rate, accuracy = 0.1)),
             hjust = -0.1, size = 3.5) +
   coord_flip() +
-  scale_y_continuous(labels = percent, limits = c(0, 0.20)) +
-  labs(title = "readmission rate by discharge disposition (top 10)",
-       x = "discharge disposition ID", y = "readmission rate")
+  scale_y_continuous(labels = percent, limits = c(0, 0.25)) +
+  labs(title = "readmission rate by discharge disposition group",
+       x = "discharge group", y = "readmission rate")
 save_fig("10_discharge_readmit.png", 7, 5)
 
 # 11: correlation heatmap (numeric features)
 num_df <- df %>%
-  select(time_in_hospital, num_lab_procedures, num_procedures,
-         num_medications, number_outpatient, number_emergency,
-         number_inpatient, number_diagnoses, age_numeric,
-         a1cresult, max_glu_serum) %>%
+  select(where(is.numeric)) %>%
+  select(-readmitted_binary) %>%
   mutate(readmitted = as.integer(as.character(df$readmitted_binary)))
 
 cor_mat <- cor(num_df, use = "complete.obs")
