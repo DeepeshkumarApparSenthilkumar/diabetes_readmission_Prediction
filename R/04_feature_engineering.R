@@ -91,11 +91,32 @@ if (length(med_cols) > 0) {
   df$n_meds_adjusted <- 0L
 }
 
-cat("New features (15 total):\n")
+# ── Pass 2: features depending on discharge destination or pass-1 features ────
+df <- df %>%
+  mutate(
+    # 16-18. High-risk discharge destinations (discharge_disposition_id is top SHAP feature)
+    discharge_snf      = as.integer(discharge_disposition_id == "SNF"),
+    discharge_transfer = as.integer(discharge_disposition_id %in% c("Transfer_Acute", "Transfer_Other")),
+    discharge_ama      = as.integer(discharge_disposition_id == "AMA"),
+
+    # 19. Lab intensity per hospital day (care complexity per unit time)
+    lab_per_day        = ifelse(time_in_hospital > 0,
+                                num_lab_procedures / time_in_hospital, 0),
+
+    # 20. Nonlinear inpatient signal (squared — prior-visit dose-response)
+    inpatient_sq       = number_inpatient^2,
+
+    # 21. Age × Charlson comorbidity interaction
+    age_x_charlson     = age_numeric * charlson_proxy
+  )
+
+cat("New features (21 total):\n")
 cat("  Original 8: high_utilizer, polypharmacy, total_visits, diab_primary,\n")
 cat("              any_change, age_x_inpatient, med_x_diagnoses, emergency_ratio\n")
 cat("  New 7: charlson_proxy, n_diag_systems, visit_intensity,\n")
 cat("         poor_glucose_ctrl, complex_case, insulin_dependent, n_meds_adjusted\n")
+cat("  Added 6: discharge_snf, discharge_transfer, discharge_ama,\n")
+cat("           lab_per_day, inpatient_sq, age_x_charlson\n")
 cat("Output:", nrow(df), "rows x", ncol(df), "cols\n")
 
 write_csv(df, "data/processed/diabetes_featured.csv")

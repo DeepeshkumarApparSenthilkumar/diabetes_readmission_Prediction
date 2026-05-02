@@ -7,7 +7,6 @@ library(lightgbm)
 library(ggplot2)
 
 model_lr   <- readRDS("outputs/results/model_lr.rds")
-model_rf   <- readRDS("outputs/results/model_rf.rds")
 model_xgb  <- readRDS("outputs/results/model_xgb.rds")
 model_lgbm <- lgb.load("outputs/results/model_lgbm.txt")
 model_ens  <- readRDS("outputs/results/model_ensemble.rds")
@@ -18,16 +17,15 @@ ens_probs  <- readRDS("outputs/results/ensemble_test_probs.rds")
 thresh_df  <- read_csv("outputs/results/optimal_thresholds.csv",
                        show_col_types = FALSE)
 
-COLORS <- c(LR = "#7F77DD", RF = "#1D9E75", XGB = "#D85A30",
+COLORS <- c(LR = "#7F77DD", XGB = "#D85A30",
             LightGBM = "#F4A261", Ensemble = "#6C3483")
 
 # ── Predictions ───────────────────────────────────────────────────────────────
 lr_prob   <- predict(model_lr,   newdata = test_set,  type = "prob")[, "yes"]
-rf_prob   <- predict(model_rf,   newdata = test_set,  type = "prob")[, "yes"]
 xgb_prob  <- predict(model_xgb,  xgb.DMatrix(test_mat))
 lgbm_prob <- predict(model_lgbm, test_mat)
 
-probs_list <- list(LR = lr_prob, RF = rf_prob, XGB = xgb_prob,
+probs_list <- list(LR = lr_prob, XGB = xgb_prob,
                    LightGBM = lgbm_prob, Ensemble = ens_probs)
 
 # ── Metrics function ──────────────────────────────────────────────────────────
@@ -66,8 +64,7 @@ get_thresh <- function(model_name) {
 }
 
 results <- bind_rows(
-  eval_model(lr_prob,   test_label, "LR",       0.5),
-  eval_model(rf_prob,   test_label, "RF",       0.5),
+  eval_model(lr_prob,   test_label, "LR",       get_thresh("LR")),
   eval_model(xgb_prob,  test_label, "XGB",      get_thresh("XGBoost")),
   eval_model(lgbm_prob, test_label, "LightGBM", get_thresh("LightGBM")),
   eval_model(ens_probs, test_label, "Ensemble", get_thresh("Ensemble"))
@@ -79,7 +76,6 @@ write_csv(results, "outputs/results/model_comparison.csv")
 
 # ── Figure 17: ROC curves ─────────────────────────────────────────────────────
 roc_lr   <- roc(test_label, lr_prob,   quiet = TRUE)
-roc_rf   <- roc(test_label, rf_prob,   quiet = TRUE)
 roc_xgb  <- roc(test_label, xgb_prob,  quiet = TRUE)
 roc_lgbm <- roc(test_label, lgbm_prob, quiet = TRUE)
 roc_ens  <- roc(test_label, ens_probs, quiet = TRUE)
@@ -88,7 +84,6 @@ png("outputs/figures/17_roc_curves.png", width = 800, height = 650)
 plot(roc_lr,   col = COLORS["LR"],       lwd = 2,
      main = "ROC curves — all models",
      xlab = "False Positive Rate", ylab = "True Positive Rate")
-plot(roc_rf,   col = COLORS["RF"],       lwd = 2, add = TRUE)
 plot(roc_xgb,  col = COLORS["XGB"],      lwd = 2, add = TRUE)
 plot(roc_lgbm, col = COLORS["LightGBM"], lwd = 2, add = TRUE)
 plot(roc_ens,  col = COLORS["Ensemble"], lwd = 2, add = TRUE, lty = 2)
@@ -96,7 +91,6 @@ abline(a = 0, b = 1, lty = 3, col = "grey60")
 legend("bottomright", bty = "n",
   legend = c(
     paste("LR        AUC =", round(auc(roc_lr),   3)),
-    paste("RF        AUC =", round(auc(roc_rf),   3)),
     paste("XGBoost  AUC =", round(auc(roc_xgb),  3)),
     paste("LightGBM AUC =", round(auc(roc_lgbm), 3)),
     paste("Ensemble AUC =", round(auc(roc_ens),  3))
@@ -112,14 +106,12 @@ make_pr <- function(probs, label) {
            scores.class1 = probs[label == 0], curve = TRUE)
 }
 pr_lr   <- make_pr(lr_prob,   test_label)
-pr_rf   <- make_pr(rf_prob,   test_label)
 pr_xgb  <- make_pr(xgb_prob,  test_label)
 pr_lgbm <- make_pr(lgbm_prob, test_label)
 pr_ens  <- make_pr(ens_probs, test_label)
 
 plot(pr_lr,   col = COLORS["LR"],       lwd = 2, auc.main = FALSE,
      main = "Precision-Recall curves — all models")
-plot(pr_rf,   col = COLORS["RF"],       lwd = 2, add = TRUE)
 plot(pr_xgb,  col = COLORS["XGB"],      lwd = 2, add = TRUE)
 plot(pr_lgbm, col = COLORS["LightGBM"], lwd = 2, add = TRUE)
 plot(pr_ens,  col = COLORS["Ensemble"], lwd = 2, add = TRUE, lty = 2)
@@ -127,7 +119,6 @@ abline(h = mean(test_label), lty = 3, col = "grey60")
 legend("topright", bty = "n",
   legend = c(
     paste("LR        PR-AUC =", round(pr_lr$auc.integral,   3)),
-    paste("RF        PR-AUC =", round(pr_rf$auc.integral,   3)),
     paste("XGBoost  PR-AUC =", round(pr_xgb$auc.integral,  3)),
     paste("LightGBM PR-AUC =", round(pr_lgbm$auc.integral, 3)),
     paste("Ensemble PR-AUC =", round(pr_ens$auc.integral,  3))
@@ -136,20 +127,20 @@ legend("topright", bty = "n",
 dev.off()
 cat("saved 18_pr_curves.png\n")
 
-# ── Figure 19: RF feature importance ─────────────────────────────────────────
-rf_imp <- varImp(model_rf)$importance %>%
+# ── Figure 19: LR feature importance (coefficients) ──────────────────────────
+lr_imp <- varImp(model_lr)$importance %>%
   rownames_to_column("feature") %>%
   arrange(desc(Overall)) %>%
   head(15)
 
-ggplot(rf_imp, aes(x = reorder(feature, Overall), y = Overall)) +
-  geom_col(fill = COLORS["RF"], alpha = 0.85) +
+ggplot(lr_imp, aes(x = reorder(feature, Overall), y = Overall)) +
+  geom_col(fill = COLORS["LR"], alpha = 0.85) +
   coord_flip() +
-  labs(title = "top 15 features — Random Forest importance",
+  labs(title = "top 15 features — Logistic Regression importance",
        x = "", y = "importance") +
   theme_minimal()
-ggsave("outputs/figures/19_rf_feature_importance.png", width = 7, height = 6)
-cat("saved 19_rf_feature_importance.png\n")
+ggsave("outputs/figures/19_lr_feature_importance.png", width = 7, height = 6)
+cat("saved 19_lr_feature_importance.png\n")
 
 # ── Figure 20: LightGBM feature importance ───────────────────────────────────
 lgbm_imp <- lgb.importance(model_lgbm) %>% head(15)
@@ -225,8 +216,8 @@ cat("saved 25_calibration_curves.png\n")
 
 # ── DeLong test: ensemble vs each model ───────────────────────────────────────
 cat("\n=== DeLong AUC Tests (vs Ensemble) ===\n")
-for (nm in c("LR", "RF", "XGB", "LightGBM")) {
-  other_roc <- switch(nm, LR = roc_lr, RF = roc_rf,
+for (nm in c("LR", "XGB", "LightGBM")) {
+  other_roc <- switch(nm, LR = roc_lr,
                           XGB = roc_xgb, LightGBM = roc_lgbm)
   test_res  <- roc.test(roc_ens, other_roc, method = "delong")
   cat(sprintf("Ensemble vs %s: p=%.4f %s\n",

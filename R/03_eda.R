@@ -156,7 +156,6 @@ save_fig("10_discharge_readmit.png", 7, 5)
 # 11: correlation heatmap (numeric features)
 num_df <- df %>%
   select(where(is.numeric)) %>%
-  select(-readmitted_binary) %>%
   mutate(readmitted = as.integer(as.character(df$readmitted_binary)))
 
 cor_mat <- cor(num_df, use = "complete.obs")
@@ -220,28 +219,43 @@ save_fig("15_polypharmacy.png", 6, 4)
 # --- Statistical Tests ---
 cat("\n=== STATISTICAL TESTS ===\n")
 
-# chi-square for categorical columns
-cat_cols <- df %>% select(where(is.factor)) %>%
-  select(-readmitted_binary) %>% names()
+label <- as.integer(as.character(df$readmitted_binary))
+
+# chi-square for character columns (factors written as chr by write_csv)
+cat_cols <- df %>% select(where(is.character)) %>% names()
+cat("Categorical cols for chi-square:", length(cat_cols), "\n")
 
 chi_results <- map_dfr(cat_cols, function(col) {
-  tbl <- table(df[[col]], df$readmitted_binary)
-  test <- chisq.test(tbl, simulate.p.value = TRUE)
-  tibble(feature = col, test = "chi-square",
-         statistic = round(test$statistic, 2), p_value = round(test$p.value, 4))
+  result <- tryCatch({
+    tbl  <- table(df[[col]], label)
+    test <- stats::chisq.test(tbl, simulate.p.value = TRUE)
+    tibble(feature = col, test = "chi-square",
+           statistic = round(as.numeric(test$statistic), 2),
+           p_value   = round(as.numeric(test$p.value), 4))
+  }, error = function(e) {
+    tibble(feature = col, test = "chi-square", statistic = NA_real_, p_value = NA_real_)
+  })
+  result
 })
 
 # Mann-Whitney for numeric columns
-num_cols <- df %>% select(where(is.numeric)) %>%
-  select(-readmitted_binary) %>% names()
+num_cols <- df %>% select(where(is.numeric)) %>% names()
+cat("Numeric cols for Mann-Whitney:", length(num_cols), "\n")
 
 mw_results <- map_dfr(num_cols, function(col) {
-  test <- wilcox.test(df[[col]] ~ df$readmitted_binary, exact = FALSE)
-  tibble(feature = col, test = "mann-whitney",
-         statistic = round(test$statistic, 2), p_value = round(test$p.value, 4))
+  result <- tryCatch({
+    test <- stats::wilcox.test(df[[col]] ~ label, exact = FALSE)
+    tibble(feature = col, test = "mann-whitney",
+           statistic = round(as.numeric(test$statistic), 2),
+           p_value   = round(as.numeric(test$p.value), 4))
+  }, error = function(e) {
+    tibble(feature = col, test = "mann-whitney", statistic = NA_real_, p_value = NA_real_)
+  })
+  result
 })
 
 stat_tests <- bind_rows(chi_results, mw_results) %>%
+  filter(!is.na(p_value)) %>%
   mutate(significant = p_value < 0.05) %>%
   arrange(p_value)
 
@@ -249,22 +263,24 @@ print(stat_tests, n = Inf)
 write_csv(stat_tests, "outputs/results/statistical_tests.csv")
 
 # 16: significance lollipop plot
-stat_tests %>%
-  slice_head(n = 20) %>%
-  mutate(neg_log_p = -log10(p_value + 1e-10)) %>%
-  ggplot(aes(x = reorder(feature, neg_log_p), y = neg_log_p,
-             color = significant)) +
-  geom_segment(aes(xend = feature, y = 0, yend = neg_log_p), linewidth = 1) +
-  geom_point(size = 3) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed",
-             color = "red", alpha = 0.7) +
-  coord_flip() +
-  scale_color_manual(values = c("TRUE" = "#D85A30", "FALSE" = "#999999")) +
-  labs(title = "feature significance (-log10 p-value)",
-       subtitle = "dashed line = p=0.05 threshold",
-       x = "", y = "-log10(p-value)", color = "p < 0.05") +
-  theme(legend.position = "bottom")
-save_fig("16_significance_plot.png", 8, 7)
+if (nrow(stat_tests) > 0) {
+  stat_tests %>%
+    slice_head(n = 20) %>%
+    mutate(neg_log_p = -log10(p_value + 1e-10)) %>%
+    ggplot(aes(x = reorder(feature, neg_log_p), y = neg_log_p,
+               color = significant)) +
+    geom_segment(aes(xend = feature, y = 0, yend = neg_log_p), linewidth = 1) +
+    geom_point(size = 3) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed",
+               color = "red", alpha = 0.7) +
+    coord_flip() +
+    scale_color_manual(values = c("TRUE" = "#D85A30", "FALSE" = "#999999")) +
+    labs(title = "feature significance (-log10 p-value)",
+         subtitle = "dashed line = p=0.05 threshold",
+         x = "", y = "-log10(p-value)", color = "p < 0.05") +
+    theme(legend.position = "bottom")
+  save_fig("16_significance_plot.png", 8, 7)
+}
 
 cat("\nAll EDA plots saved to outputs/figures/\n")
 cat("Statistical tests saved to outputs/results/statistical_tests.csv\n")

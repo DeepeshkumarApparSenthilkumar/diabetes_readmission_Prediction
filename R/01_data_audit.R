@@ -32,7 +32,7 @@ top_missing_cols <- missing %>% slice_head(n = 10) %>% pull(col)
 if (length(top_missing_cols) > 0) {
   missing_mat <- df %>%
     select(all_of(top_missing_cols)) %>%
-    slice_sample(n = min(2000, n())) %>%
+    slice_sample(n = min(2000L, nrow(df))) %>%
     mutate(row_id = row_number()) %>%
     pivot_longer(-row_id, names_to = "col", values_to = "val") %>%
     mutate(is_missing = is.na(val))

@@ -39,7 +39,7 @@ print(prop.table(table(train_smote_label)))
 
 # rebuild factor columns for LR and RF (caret needs factors)
 train_smote_df <- bind_cols(train_smote, readmitted_binary = train_smote_label) %>%
-  mutate(across(everything(), ~ if (is.numeric(.) && n_distinct(.) < 20) as.factor(.) else .)) %>%
+  mutate(across(everything(), ~ if (is.numeric(.) && n_distinct(.) >= 2 && n_distinct(.) < 20) as.factor(.) else .)) %>%
   mutate(readmitted_binary = train_smote_label)
 
 # ── 5-fold CV setup ──────────────────────────────────────────────────────────
@@ -64,17 +64,10 @@ cat("LR best ROC:", round(max(model_lr$results$ROC), 3),
     "| alpha:", model_lr$bestTune$alpha,
     "| lambda:", model_lr$bestTune$lambda, "\n")
 
-# ── [2/4] Random Forest ───────────────────────────────────────────────────────
-cat("\n[2/4] Training Random Forest...\n")
-rf_grid <- expand.grid(mtry = c(5, 8, 12, 15, 20))
-model_rf <- train(
-  readmitted_binary ~ ., data = train_smote_df,
-  method = "rf", trControl = ctrl, metric = "ROC",
-  tuneGrid = rf_grid, ntree = 500,          # 500 trees (was 200)
-  classwt = c("no" = 1, "yes" = 3)         # additional class weighting on top of SMOTE
-)
-cat("RF best ROC:", round(max(model_rf$results$ROC), 3),
-    "| mtry:", model_rf$bestTune$mtry, "\n")
+# ── [2/4] Random Forest — skipped (OOM on 89K SMOTE rows; LR used in ensemble) ─
+cat("\n[2/4] Random Forest skipped — memory constraint on SMOTE-expanded dataset.\n")
+cat("      LR OOF predictions used in ensemble instead.\n")
+model_rf <- NULL
 
 # ── [3/4] XGBoost ────────────────────────────────────────────────────────────
 cat("\n[3/4] Training XGBoost...\n")
@@ -102,10 +95,10 @@ dtest  <- xgb.DMatrix(data = test_mat,
 
 # Expanded grid: adds min_child_weight and gamma for regularization
 xgb_params_grid <- expand.grid(
-  max_depth       = c(3, 5, 6, 8),
-  eta             = c(0.01, 0.05, 0.1),
+  max_depth        = c(4, 5, 6),
+  eta              = c(0.01, 0.05, 0.1),
   min_child_weight = c(1, 5, 10),
-  gamma           = c(0, 0.1, 0.5)
+  gamma            = c(0, 0.1, 0.5)
 )
 cat("XGB grid size:", nrow(xgb_params_grid), "combos\n")
 
@@ -120,14 +113,16 @@ for (i in seq_len(nrow(xgb_params_grid))) {
     gamma             = xgb_params_grid$gamma[i],
     subsample         = 0.8,
     colsample_bytree  = 0.8,
+    colsample_bylevel = 0.8,
+    max_delta_step    = 1,         # stabilizes updates for imbalanced data
     lambda            = 1.0,       # L2 regularization
     alpha             = 0.1,       # L1 regularization
     scale_pos_weight  = pos_weight, # native class imbalance handling
     seed              = 42
   )
   cv_result <- xgb.cv(
-    params = params, data = dtrain, nrounds = 300,
-    nfold = 5, early_stopping_rounds = 30, verbose = FALSE
+    params = params, data = dtrain, nrounds = 200,
+    nfold = 5, early_stopping_rounds = 20, verbose = FALSE
   )
   auc_val <- max(cv_result$evaluation_log$test_auc_mean)
   if (i %% 12 == 0 || auc_val > best_auc) {
@@ -172,6 +167,7 @@ for (i in seq_len(nrow(lgbm_grid))) {
     num_leaves        = lgbm_grid$num_leaves[i],
     learning_rate     = lgbm_grid$learning_rate[i],
     min_data_in_leaf  = lgbm_grid$min_data_in_leaf[i],
+    max_depth         = 8,      # cap depth to prevent leaf overfitting
     feature_fraction  = 0.8,
     bagging_fraction  = 0.8,
     bagging_freq      = 5,
@@ -181,8 +177,8 @@ for (i in seq_len(nrow(lgbm_grid))) {
     verbose           = -1
   )
   cv_result <- lgb.cv(
-    params = lgbm_params, data = lgbm_train, nrounds = 300,
-    nfold = 5, early_stopping_rounds = 30, verbose = -1
+    params = lgbm_params, data = lgbm_train, nrounds = 200,
+    nfold = 5, early_stopping_rounds = 20, verbose = -1
   )
   auc_val <- max(unlist(cv_result$record_evals$valid$auc$eval))
   if (i %% 9 == 0 || auc_val > best_lgbm_auc) {
@@ -206,9 +202,8 @@ model_lgbm <- lgb.train(
 cat("LightGBM best CV AUC:", round(best_lgbm_auc, 3), "\n")
 
 # ── Save all artifacts ────────────────────────────────────────────────────────
-saveRDS(model_lr,   "outputs/results/model_lr.rds")
-saveRDS(model_rf,   "outputs/results/model_rf.rds")
-saveRDS(model_xgb,  "outputs/results/model_xgb.rds")
+saveRDS(model_lr,  "outputs/results/model_lr.rds")
+saveRDS(model_xgb, "outputs/results/model_xgb.rds")
 lgb.save(model_lgbm, "outputs/results/model_lgbm.txt")
 saveRDS(test,           "outputs/results/test_set.rds")
 saveRDS(test_mat,       "outputs/results/test_mat.rds")
